@@ -1,0 +1,105 @@
+# Compila la APK de las terminales y la publica como Release en GitHub.
+# Las terminales revisan "releases/latest/download/version.json" al abrir, al
+# volver a primer plano y cada 30 min; si hay una versión más nueva bloquean la
+# app hasta instalarla (ver src/features/update).
+#
+# Se ejecuta en cada push a main o a mano desde Actions ("Run workflow").
+#
+# Secrets necesarios (Settings → Secrets and variables → Actions):
+#   ANDROID_KEYSTORE_BASE64    llave de firma (.jks) en base64
+#   ANDROID_KEYSTORE_PASSWORD  contraseña de la llave
+#   ANDROID_KEY_ALIAS          alias de la llave
+# La llave debe ser SIEMPRE la misma: Android no actualiza una APK firmada con
+# otra llave.
+name: Publicar APK terminal
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-release
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    env:
+      # API a la que se conectan las terminales (variable MOBILE_API_URL en
+      # Settings → Secrets and variables → Actions → Variables para cambiarla).
+      EXPO_PUBLIC_API_URL: ${{ vars.MOBILE_API_URL || 'http://192.168.1.249/api' }}
+      APP_VERSION: 1.0.${{ github.run_number }}
+    steps:
+      - name: Validar secrets de firma
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          AL: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$KS" ] || [ -z "$PW" ] || [ -z "$AL" ]; then
+            echo "::error::Faltan los secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD o ANDROID_KEY_ALIAS"
+            exit 1
+          fi
+          # versionCode siempre crece; 100+ para quedar por encima de las APK de prueba.
+          echo "VERSION_CODE=$((100 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Fijar versión ${{ env.APP_VERSION }}
+        run: |
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('app.json','utf8'));p.expo.version=process.env.APP_VERSION;p.expo.android.versionCode=Number(process.env.VERSION_CODE);fs.writeFileSync('app.json',JSON.stringify(p,null,2)+'\n')"
+
+      - name: Generar proyecto Android
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Compilar APK firmada
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          AL: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          echo "$KS" | base64 -d > "$RUNNER_TEMP/release.jks"
+          cd android
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file="$RUNNER_TEMP/release.jks" \
+            -Pandroid.injected.signing.store.password="$PW" \
+            -Pandroid.injected.signing.key.alias="$AL" \
+            -Pandroid.injected.signing.key.password="$PW"
+          rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Preparar archivos de la Release
+        run: |
+          mkdir -p salida
+          cp android/app/build/outputs/apk/release/app-release.apk salida/sigpro-terminal.apk
+          APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${APP_VERSION}/sigpro-terminal.apk"
+          printf '{"version":"%s","versionCode":%s,"apk":"%s"}\n' "$APP_VERSION" "$VERSION_CODE" "$APK_URL" > salida/version.json
+          cat salida/version.json
+
+      - name: Publicar Release v${{ env.APP_VERSION }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTAS: ${{ github.event.head_commit.message || 'Publicación manual' }}
+        run: |
+          gh release create "v${APP_VERSION}" salida/sigpro-terminal.apk salida/version.json \
+            --title "Terminal v${APP_VERSION}" \
+            --notes "$NOTAS" \
+            --latest

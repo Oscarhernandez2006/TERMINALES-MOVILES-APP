@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "SIGPRO Móvil",
+    "slug": "sigpro-movil",
+    "scheme": "sigpro",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon-sigpro.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "co.santacruz.sigpro.movil",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      }
+    },
+    "android": {
+      "package": "co.santacruz.sigpro.movil",
+      "adaptiveIcon": {
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/images/icon-sigpro.png"
+      },
+      "softwareKeyboardLayoutMode": "pan",
+      "permissions": ["android.permission.REQUEST_INSTALL_PACKAGES"],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar",
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/icon-sigpro.png",
+          "imageWidth": 200,
+          "backgroundColor": "#FFFFFF"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

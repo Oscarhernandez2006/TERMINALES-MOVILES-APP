@@ -26,16 +26,66 @@ export interface ItemPicking {
   pesado: boolean;
 }
 
-export interface Picking {
-  id: string | null;
-  orden: string;
-  ordenActiva: boolean;
-  status: EstadoPicking;
-  terminadoAt: string | null;
-  items: ItemPicking[];
+export interface LineaAvance {
+  productoId: string;
+  productoCodigo: string;
+  productoNombre: string;
+  plu: string | null;
+  productoCliente: string | null;
+  /** null: el producto no está en la orden de compra del cliente. */
+  kgPedidos: number | null;
+  empaques: number;
+  kgAlistados: number;
+  kgPesados: number;
+  completo: boolean;
 }
 
-export type ItemAgregado = ItemPicking & { advertenciaInventario: string | null };
+/** Pre-orden: lo que se alista para una orden de compra del cliente (una tienda) o sin OC. */
+export interface PreordenResumen {
+  id: string;
+  nombre: string;
+  ocNumero: string | null;
+  tiendaCodigo: string | null;
+  tiendaNombre: string | null;
+  observaciones: string | null;
+  /** Alistador que tiene la pre-orden: solo él la alista hasta liberarla. */
+  asignado: { id: string; nombre: string } | null;
+  asignadoAt: string | null;
+  status: EstadoPicking;
+  terminadoAt: string | null;
+  empaques: number;
+  porPesar: number;
+  kgPedidos: number;
+  kgAlistados: number;
+  kgCumplidos: number;
+  /** % de la orden de compra alistado (por kilos); null sin orden de compra. */
+  porcentaje: number | null;
+  lineasCompletas: number;
+  lineasTotal: number;
+  /** Líneas de la orden de compra de la tienda con lo alistado. */
+  avance: LineaAvance[];
+}
+
+export interface Preorden extends PreordenResumen {
+  items: ItemPicking[];
+  orden: { tipo: TipoPicking; id: string; numero: string; activa: boolean };
+}
+
+export interface PickingOrden {
+  orden: string;
+  ordenActiva: boolean;
+  porcentaje: number | null;
+  kgPedidos: number;
+  preordenes: PreordenResumen[];
+  items: (ItemPicking & { preordenId: string; preorden: string; listo: boolean })[];
+}
+
+export interface AvisoPedido {
+  tipo: 'fuera' | 'excedido' | 'completo';
+  mensaje: string;
+}
+
+export type ItemAgregado = ItemPicking & { advertenciaInventario: string | null; avisoPedido: AvisoPedido | null };
 
 interface TipoConfig {
   titulo: string;
@@ -88,44 +138,76 @@ export function useOrdenesPicking(tipo: TipoPicking) {
   });
 }
 
-const pickingKey = (tipo: TipoPicking, ordenId: string) => ['picking', tipo, ordenId];
-
+/** Pre-órdenes de la orden con su avance. */
 export function usePicking(tipo: TipoPicking, ordenId: string) {
   return useQuery({
-    queryKey: pickingKey(tipo, ordenId),
+    queryKey: ['picking', tipo, ordenId],
     refetchInterval: 10_000,
-    queryFn: async () => (await api.get<Picking>(`/picking/${tipo}/${ordenId}`)).data,
+    queryFn: async () => (await api.get<PickingOrden>(`/picking/${tipo}/${ordenId}`)).data,
   });
 }
 
-/** Agrega la etiqueta al picking (pre-orden): no se registra en la orden hasta pesar el arrume. */
-export function useAgregarPicking(tipo: TipoPicking, ordenId: string) {
+export function usePreorden(id: string) {
+  return useQuery({
+    queryKey: ['picking', 'preorden', id],
+    refetchInterval: 10_000,
+    queryFn: async () => (await api.get<Preorden>(`/picking/preordenes/${id}`)).data,
+  });
+}
+
+function useInvalidar() {
   const qc = useQueryClient();
+  return () => qc.invalidateQueries({ queryKey: ['picking'] });
+}
+
+/** Pre-orden sin orden de compra (si ya existe, el servidor devuelve esa). */
+export function useCrearPreordenGeneral(tipo: TipoPicking, ordenId: string) {
+  const invalidar = useInvalidar();
+  return useMutation({
+    mutationFn: async () => (await api.post<Preorden>(`/picking/${tipo}/${ordenId}/preordenes`, { lineas: [] })).data,
+    onSettled: invalidar,
+  });
+}
+
+/** Se asigna (o libera) la pre-orden al alistador de la terminal. */
+export function useAsignacion() {
+  const invalidar = useInvalidar();
+  return useMutation({
+    mutationFn: async ({ id, accion }: { id: string; accion: 'asignar' | 'liberar' }) => {
+      await api.patch(`/picking/preordenes/${id}/${accion}`);
+    },
+    onSettled: invalidar,
+  });
+}
+
+/** Agrega la etiqueta a la pre-orden: no se registra en la orden hasta pesar el arrume. */
+export function useAgregarPicking(preordenId: string) {
+  const invalidar = useInvalidar();
   return useMutation({
     mutationFn: async (codigo: string) =>
-      (await api.post<ItemAgregado>(`/picking/${tipo}/${ordenId}/items`, { codigo })).data,
-    onSettled: () => qc.invalidateQueries({ queryKey: pickingKey(tipo, ordenId) }),
+      (await api.post<ItemAgregado>(`/picking/preordenes/${preordenId}/items`, { codigo })).data,
+    onSettled: invalidar,
   });
 }
 
-export function useQuitarPicking(tipo: TipoPicking, ordenId: string) {
-  const qc = useQueryClient();
+export function useQuitarPicking() {
+  const invalidar = useInvalidar();
   return useMutation({
     mutationFn: async (itemId: string) => {
       await api.delete(`/picking/items/${itemId}`);
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: pickingKey(tipo, ordenId) }),
+    onSettled: invalidar,
   });
 }
 
-/** Termina el picking (queda listo para pesar en escritorio) o lo reabre para seguir alistando. */
-export function useEstadoPicking(tipo: TipoPicking, ordenId: string) {
-  const qc = useQueryClient();
+/** Termina la pre-orden (queda lista para pesar en escritorio) o la reabre para seguir alistando. */
+export function useEstadoPicking(preordenId: string) {
+  const invalidar = useInvalidar();
   return useMutation({
     mutationFn: async (accion: 'terminar' | 'reabrir') => {
-      await api.patch(`/picking/${tipo}/${ordenId}/${accion}`);
+      await api.patch(`/picking/preordenes/${preordenId}/${accion}`);
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: pickingKey(tipo, ordenId) }),
+    onSettled: invalidar,
   });
 }
 

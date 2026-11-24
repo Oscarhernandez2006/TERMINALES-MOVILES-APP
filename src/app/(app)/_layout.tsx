@@ -15,7 +15,8 @@ export default function AppLayout() {
     >
       <Stack.Screen name="index" options={{ title: 'Inicio' }} />
       <Stack.Screen name="picking" options={{ title: 'Picking · Órdenes activas' }} />
-      <Stack.Screen name="picking/[tipo]/[id]" options={{ title: 'Picking' }} />
+      <Stack.Screen name="picking/[tipo]/[id]" options={{ title: 'Picking · Pre-órdenes' }} />
+      <Stack.Screen name="picking/preorden/[id]" options={{ title: 'Picking · Alistar' }} />
     </Stack>
   );
 }
